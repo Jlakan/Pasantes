@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useUser } from '../context/UserContext';
 import { db } from '../services/firebase';
-import { collection, addDoc, doc, onSnapshot, serverTimestamp, getDocs, updateDoc, query, where, orderBy, limit } from 'firebase/firestore'; 
+import { collection, addDoc, doc, onSnapshot, serverTimestamp, getDocs, updateDoc, query, where } from 'firebase/firestore'; 
 import { LogOut, CheckCircle, Loader2, User, Clock, AlertCircle } from 'lucide-react';
 import { logoutUser } from '../services/auth';
 
@@ -13,11 +13,11 @@ const DashboardPasante = () => {
   const [responsableId, setResponsableId] = useState('');
   
   // ESTADO DE LA ASISTENCIA DE HOY
-  const [asistenciaHoy, setAsistenciaHoy] = useState(null); // Aquí guardamos el objeto completo de la BD
+  const [asistenciaHoy, setAsistenciaHoy] = useState(null); 
   const [loading, setLoading] = useState(false);
-  const [cargandoEstado, setCargandoEstado] = useState(true); // Para el spinner inicial
+  const [cargandoEstado, setCargandoEstado] = useState(true); 
 
-  // 1. CARGAR STAFF (Igual que antes)
+  // 1. CARGAR STAFF
   useEffect(() => {
     const cargarStaff = async () => {
       if (!userData?.servicio_id) return;
@@ -30,8 +30,7 @@ const DashboardPasante = () => {
     cargarStaff();
   }, [userData]);
 
-  // 2. DETECTAR SESIÓN ACTIVA (EL CAMBIO CLAVE)
-  // Al entrar, buscamos si ya existe un documento para HOY
+  // 2. DETECTAR SESIÓN ACTIVA (CORREGIDO: Sin orderBy para evitar bloqueo)
   useEffect(() => {
     const hoy = new Date();
     const year = hoy.getFullYear().toString();
@@ -39,32 +38,45 @@ const DashboardPasante = () => {
     const mesNumero = (hoy.getMonth() + 1).toString().padStart(2, '0');
     const nombreCarpetaMes = `${mesNumero}_${mesNombre.charAt(0).toUpperCase() + mesNombre.slice(1)}`;
 
-    // Buscamos en la colección de este mes
+    // SIMPLIFICAMOS LA CONSULTA: Solo pedimos "las mías de este mes"
+    // (Quitamos orderBy para que Firebase no pida Índice y no se trabe)
     const q = query(
         collection(db, "Asistencias", year, nombreCarpetaMes),
-        where("uid_pasante", "==", user.uid),
-        orderBy("hora_entrada", "desc"), // Traemos la última
-        limit(1)
+        where("uid_pasante", "==", user.uid)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
         if (!snapshot.empty) {
-            const docData = snapshot.docs[0];
-            const datos = { id: docData.id, ...docData.data() };
+            // ORDENAMOS AQUÍ (En JavaScript) en lugar de en la base de datos
+            const registros = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
             
-            // Verificamos que sea DE HOY (por si la colección tiene varios días)
-            const fechaDoc = datos.hora_entrada?.toDate();
+            // Ordenar por hora_entrada (del más nuevo al más viejo)
+            registros.sort((a, b) => {
+                const fechaA = a.hora_entrada?.seconds || 0;
+                const fechaB = b.hora_entrada?.seconds || 0;
+                return fechaB - fechaA;
+            });
+
+            const ultimoRegistro = registros[0];
+
+            // Verificamos que sea DE HOY
+            const fechaDoc = ultimoRegistro.hora_entrada?.toDate();
             const esHoy = fechaDoc && fechaDoc.getDate() === hoy.getDate();
 
             if (esHoy) {
-                setAsistenciaHoy(datos); // ¡Recuperamos la sesión!
+                setAsistenciaHoy(ultimoRegistro);
             } else {
                 setAsistenciaHoy(null);
             }
         } else {
             setAsistenciaHoy(null);
         }
+        // ¡LIBERAMOS EL CÍRCULO!
         setCargandoEstado(false);
+    }, (error) => {
+        console.error("Error cargando asistencias:", error);
+        // Si hay error, también quitamos el círculo para no dejar la pantalla blanca
+        setCargandoEstado(false); 
     });
 
     return () => unsubscribe();
@@ -93,14 +105,12 @@ const DashboardPasante = () => {
         uid_responsable: responsableId, 
         nombre_responsable: responsableObj.nombre,
         
-        // USAMOS HORA_ENTRADA Y HORA_SALIDA
         hora_entrada: serverTimestamp(),
-        hora_salida: null, // <--- Importante: Empieza vacía
+        hora_salida: null, 
         
-        tipo: 'turno_completo', // Etiqueta general
+        tipo: 'turno_completo',
         estatus: 'pendiente_validacion'
       });
-      // No necesitamos setSolicitudActiva manual, el onSnapshot de arriba lo detectará solito ;)
 
     } catch (error) { console.error(error); alert("Error al registrar"); }
     setLoading(false);
@@ -118,12 +128,11 @@ const DashboardPasante = () => {
         const mesNumero = (hoy.getMonth() + 1).toString().padStart(2, '0');
         const nombreCarpetaMes = `${mesNumero}_${mesNombre.charAt(0).toUpperCase() + mesNombre.slice(1)}`;
 
-        // Actualizamos el documento existente
         const docRef = doc(db, "Asistencias", year, nombreCarpetaMes, asistenciaHoy.id);
         
         await updateDoc(docRef, {
             hora_salida: serverTimestamp(),
-            estatus: 'finalizado' // Opcional: cambiamos estatus a finalizado
+            estatus: 'finalizado'
         });
 
     } catch (error) {
@@ -136,13 +145,17 @@ const DashboardPasante = () => {
   // --- RENDERIZADO ---
 
   if (cargandoEstado) {
-      return <div style={styles.centerContainer}><Loader2 size={48} className="spin" style={{color:'#999'}}/></div>;
+      return (
+        <div style={styles.centerContainer}>
+            <Loader2 size={48} className="spin" style={{color:'#ccc'}}/>
+            <p style={{marginTop:'10px', color:'#999', fontSize:'0.9rem'}}>Cargando estado...</p>
+        </div>
+      );
   }
 
   // CASO 1: YA EXISTE UN REGISTRO DE HOY
   if (asistenciaHoy) {
     
-    // 1.1: Si fue RECHAZADO, permitimos intentar de nuevo
     if (asistenciaHoy.estatus === 'rechazado') {
         return (
             <div style={styles.centerContainer}>
@@ -154,7 +167,6 @@ const DashboardPasante = () => {
         );
     }
 
-    // 1.2: Si ya tiene HORA DE SALIDA (Turno terminado)
     if (asistenciaHoy.hora_salida) {
         return (
             <div style={styles.centerContainer}>
@@ -170,7 +182,6 @@ const DashboardPasante = () => {
         );
     }
 
-    // 1.3: Si está PENDIENTE de validación
     if (asistenciaHoy.estatus === 'pendiente_validacion') {
         return (
             <div style={styles.centerContainer}>
@@ -184,13 +195,12 @@ const DashboardPasante = () => {
         );
     }
 
-    // 1.4: Si está APROBADO y NO TIENE SALIDA (Sesión Activa)
     if (asistenciaHoy.estatus === 'aprobado') {
         return (
             <div style={styles.container}>
                 <nav style={styles.navbar}>
                     <span style={{fontWeight: 'bold'}}>Sesión Activa</span>
-                    <button onClick={logoutUser} style={{border:'none', background:'transparent'}}><LogOut size={18}/></button>
+                    <button onClick={logoutUser} style={{border:'none', background:'transparent', cursor:'pointer'}}><LogOut size={18}/></button>
                 </nav>
                 <main style={{...styles.main, textAlign:'center'}}>
                     <div style={{...styles.card, borderTop:'5px solid var(--color-success)'}}>
@@ -215,12 +225,12 @@ const DashboardPasante = () => {
     }
   }
 
-  // CASO 2: NO HAY REGISTRO HOY -> MOSTRAR FORMULARIO
+  // CASO 2: FORMULARIO NORMAL
   return (
     <div style={styles.container}>
       <nav style={styles.navbar}>
         <span style={{fontWeight: 'bold'}}>Nexus {userData?.servicio_nombre}</span>
-        <button onClick={logoutUser} style={{border:'none', background:'transparent'}}><LogOut size={18}/></button>
+        <button onClick={logoutUser} style={{border:'none', background:'transparent', cursor:'pointer'}}><LogOut size={18}/></button>
       </nav>
       <main style={styles.main}>
         <div style={styles.card}>
@@ -233,9 +243,13 @@ const DashboardPasante = () => {
               <label style={styles.label}>Responsable</label>
               <select style={styles.select} value={responsableId} onChange={(e) => setResponsableId(e.target.value)} required>
                 <option value="">-- Selecciona --</option>
-                {responsables.map((resp) => (
-                  <option key={resp.uid} value={resp.uid}>{resp.nombre}</option>
-                ))}
+                {responsables.length === 0 ? (
+                    <option disabled>No hay responsables disponibles</option>
+                ) : (
+                    responsables.map((resp) => (
+                      <option key={resp.uid} value={resp.uid}>{resp.nombre}</option>
+                    ))
+                )}
               </select>
               <button type="submit" style={styles.button} disabled={loading || responsables.length === 0}>
                 {loading ? '...' : '📍 Marcar Entrada'}
@@ -248,7 +262,6 @@ const DashboardPasante = () => {
   );
 };
 
-// ESTILOS
 const styles = {
   container: { minHeight: '100vh', backgroundColor: '#f4f6f9' },
   centerContainer: { minHeight:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'1rem', textAlign:'center', padding:'2rem' },
