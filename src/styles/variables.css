@@ -1,0 +1,37 @@
+/* src/styles/variables.css */
+:root {
+  /* --- PALETA DE COLORES CEREDI --- */
+
+  /* Primarios (Identidad) */
+  --color-primary: #0056b3; /* Azul Fuerte Institucional */
+  --color-primary-light: #e3f2fd; /* Azul muy clarito (fondos suaves) */
+  --color-secondary: #00bcd4; /* Cyan (detalles) */
+
+  /* Estados (Semáforo) */
+  --color-success: #28a745; /* Verde (Asistencia OK / Aprobado) */
+  --color-warning: #ffc107; /* Amarillo (Retardo / Pendiente) */
+  --color-danger: #dc3545; /* Rojo (Falta / Reporte / Ban) */
+  --color-text-danger: #721c24; /* Texto rojo oscuro para alertas */
+
+  /* Neutros */
+  --color-background: #f4f6f9; /* Gris pálido (Fondo de pantalla) */
+  --color-surface: #ffffff; /* Blanco (Tarjetas y modales) */
+  --color-text-main: #212529; /* Negro suave (Texto principal) */
+  --color-text-muted: #6c757d; /* Gris (Textos secundarios) */
+  --color-border: #dee2e6; /* Bordes sutiles */
+
+  /* --- TIPOGRAFÍA Y ESPACIADO --- */
+  --font-main: system-ui, -apple-system, sans-serif;
+  --radius-card: 12px; /* Bordes redondeados modernos */
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Reseteo básico para que ocupe toda la pantalla */
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-main);
+  background-color: var(--color-background);
+  color: var(--color-text-main);
+}
