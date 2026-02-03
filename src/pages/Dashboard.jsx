@@ -1,348 +1,321 @@
-// src/pages/Dashboard.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useUser } from '../context/UserContext';
-import { logoutUser } from '../services/auth';
 import { db } from '../services/firebase';
-import { collection, onSnapshot, doc, updateDoc, serverTimestamp, query, where } from 'firebase/firestore';
 import { 
-  LogOut, ShieldCheck, ChevronLeft, ChevronRight, 
-  CheckCircle, XCircle, Calendar as CalIcon, UserPlus, Layers 
+  collection, query, where, onSnapshot, doc, updateDoc, 
+  serverTimestamp, addDoc, getDocs, increment, orderBy 
+} from 'firebase/firestore'; 
+import { 
+  LogOut, UserCheck, AlertTriangle, FileText, CheckCircle, 
+  Users, Eye, X, Clock, AlertCircle 
 } from 'lucide-react';
+import { logoutUser } from '../services/auth';
 
-// --- IMPORTAMOS LOS COMPONENTES ESPECÍFICOS ---
-import DashboardPasante from './DashboardPasante';
-import DashboardStaff from './DashboardStaff';
-import AdminServicios from '../components/AdminServicios'; // <--- El componente nuevo
-
-// --- UTILIDADES DE FECHA ---
 const getNombreCarpeta = (fecha) => {
     const mesNumero = (fecha.getMonth() + 1).toString().padStart(2, '0');
     const mesNombre = fecha.toLocaleString('es-ES', { month: 'long' });
     return `${mesNumero}_${mesNombre.charAt(0).toUpperCase() + mesNombre.slice(1)}`;
 };
 
-const getDiasEnMes = (fecha) => {
-    return new Date(fecha.getFullYear(), fecha.getMonth() + 1, 0).getDate();
-};
+const DashboardStaff = () => {
+  const { user, userData } = useUser();
+  const [solicitudes, setSolicitudes] = useState([]);
+  const [vista, setVista] = useState('entradas'); 
+  
+  // Datos Generales
+  const [pasantes, setPasantes] = useState([]); 
+  const [reporteForm, setReporteForm] = useState({ uid_pasante: '', gravedad: 'leve', descripcion: '' });
 
-// ==========================================
-// 1. DASHBOARD DE ADMINISTRADOR (COMPLETO)
-// ==========================================
-const DashboardAdmin = () => {
-    const { user } = useUser();
-    
-    // VISTAS: 'asistencias' | 'usuarios' | 'servicios'
-    const [vistaAdmin, setVistaAdmin] = useState('asistencias'); 
+  // ESTADOS PARA EL EXPEDIENTE (MODAL)
+  const [pasanteSeleccionado, setPasanteSeleccionado] = useState(null);
+  const [historialReportes, setHistorialReportes] = useState([]);
+  const [cargandoHistorial, setCargandoHistorial] = useState(false);
 
-    // --- ESTADOS: CALENDARIO ---
-    const [fechaActual, setFechaActual] = useState(new Date());
-    const [asistenciasMes, setAsistenciasMes] = useState([]);
-    const [diaSeleccionado, setDiaSeleccionado] = useState(new Date().getDate());
+  // 1. ESCUCHAR SOLICITUDES (Entradas/Salidas)
+  useEffect(() => {
+    const hoy = new Date();
+    const year = hoy.getFullYear().toString();
+    const carpetaMes = getNombreCarpeta(hoy);
+    const q = query(collection(db, "Asistencias", year, carpetaMes), where("uid_responsable", "==", user.uid));
 
-    // --- ESTADOS: APROBACIÓN USUARIOS ---
-    const [usuariosPendientes, setUsuariosPendientes] = useState([]);
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+        const pendientes = snapshot.docs
+            .map(d => ({ id: d.id, path_year: year, path_mes: carpetaMes, ...d.data() }))
+            .filter(item => item.estatus === 'pendiente_validacion' || item.estatus === 'pendiente_salida');
+        setSolicitudes(pendientes);
+    }, () => setSolicitudes([]));
 
-    // A. CARGAR ASISTENCIAS DEL MES (Calendario)
-    useEffect(() => {
-        const year = fechaActual.getFullYear().toString();
-        const carpetaMes = getNombreCarpeta(fechaActual);
-        
-        // Escuchamos la colección: Asistencias > 2026 > 01_Enero
-        const coleccionRef = collection(db, "Asistencias", year, carpetaMes);
+    return () => unsubscribe();
+  }, [user.uid]);
 
-        const unsubscribe = onSnapshot(coleccionRef, (snapshot) => {
-            const datos = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data(),
-                fechaJS: doc.data().fecha ? doc.data().fecha.toDate() : new Date()
-            }));
-            setAsistenciasMes(datos);
-        }, () => setAsistenciasMes([])); // Si no existe el mes, limpiar
-
-        return () => unsubscribe();
-    }, [fechaActual]);
-
-    // B. CARGAR USUARIOS NUEVOS POR APROBAR
-    useEffect(() => {
-        const q = query(collection(db, "Usuarios"), where("estatus_cuenta", "==", "por_aprobar"));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            setUsuariosPendientes(snapshot.docs.map(d => ({id: d.id, ...d.data()})));
+  // 2. CARGAR LISTA DE PASANTES (Para tab "Mis Pasantes" y select "Reportes")
+  useEffect(() => {
+    if (userData.servicio_id && (vista === 'pasantes' || vista === 'reportes')) {
+        const q = collection(db, userData.servicio_id, "Data", "Pasantes");
+        const unsubscribe = onSnapshot(q, (snap) => {
+            setPasantes(snap.docs.map(d => ({uid: d.id, ...d.data()})));
         });
         return () => unsubscribe();
-    }, []);
+    }
+  }, [userData, vista]);
 
-    // --- ACCIONES ---
-    const cambiarMes = (direccion) => {
-        const nuevaFecha = new Date(fechaActual);
-        nuevaFecha.setMonth(fechaActual.getMonth() + direccion);
-        setFechaActual(nuevaFecha);
-        setDiaSeleccionado(1); 
-    };
+  // 3. CARGAR EXPEDIENTE (Cuando seleccionas a alguien)
+  useEffect(() => {
+    if (!pasanteSeleccionado) {
+        setHistorialReportes([]);
+        return;
+    }
+    setCargandoHistorial(true);
 
-    const validarAsistencia = async (id, decision) => {
-        const year = fechaActual.getFullYear().toString();
-        const carpetaMes = getNombreCarpeta(fechaActual);
-        await updateDoc(doc(db, "Asistencias", year, carpetaMes, id), { 
-            estatus: decision, 
-            hora_validacion: serverTimestamp() 
-        });
-    };
+    // Buscamos en la colección GLOBAL de Reportes, filtrando por el UID del pasante
+    const q = query(
+        collection(db, "Reportes"), 
+        where("uid_pasante", "==", pasanteSeleccionado.uid),
+        orderBy("fecha", "desc") // Lo más reciente primero
+    );
 
-    const aprobarUsuario = async (uid, rol, nombre) => {
-        if(!window.confirm(`¿Aceptar a ${nombre} como ${rol.toUpperCase()}?`)) return;
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+        setHistorialReportes(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        setCargandoHistorial(false);
+    });
+
+    return () => unsubscribe();
+  }, [pasanteSeleccionado]);
+
+
+  // --- FUNCIONES ACCIONES ---
+  const validarEntrada = async (item, decision) => {
+    try {
+        await updateDoc(doc(db, "Asistencias", item.path_year, item.path_mes, item.id), { estatus: decision, hora_validacion: serverTimestamp() });
+    } catch (e) { alert("Error"); }
+  };
+
+  const validarSalida = async (item) => {
+    if(!window.confirm(`¿Cerrar turno de ${item.nombre_pasante}?`)) return;
+    try {
+        const diffMs = item.hora_salida.toDate() - item.hora_entrada.toDate();
+        const horas = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
         
-        try {
-            await updateDoc(doc(db, "Usuarios", uid), {
-                estatus_cuenta: 'activo', // ¡Aquí se abre la puerta!
-                rol: rol, 
-                registro_completo: true
+        await updateDoc(doc(db, "Asistencias", item.path_year, item.path_mes, item.id), {
+            estatus: 'finalizado', horas_sesion: horas, validado_por: user.displayName
+        });
+
+        if (userData.servicio_id) {
+            await updateDoc(doc(db, userData.servicio_id, "Data", "Pasantes", item.uid_pasante), {
+                horas_acumuladas: increment(horas), ultima_asistencia: serverTimestamp()
             });
-            alert("Usuario aprobado y activado.");
-        } catch (e) {
-            console.error(e);
-            alert("Error al aprobar usuario");
         }
-    };
+    } catch (e) { console.error(e); }
+  };
 
-    // Filtros para el calendario
-    const registrosDelDia = asistenciasMes.filter(a => a.fechaJS.getDate() === diaSeleccionado);
-    const diasArray = Array.from({length: getDiasEnMes(fechaActual)}, (_, i) => i + 1);
+  const enviarReporte = async (e) => {
+    e.preventDefault();
+    if (!reporteForm.uid_pasante) return alert("Selecciona pasante");
+    const pasanteObj = pasantes.find(p => p.uid === reporteForm.uid_pasante);
+    
+    await addDoc(collection(db, "Reportes"), {
+        ...reporteForm, 
+        nombre_pasante: pasanteObj?.nombre,
+        foto_pasante: pasanteObj?.foto_url, // Guardamos la foto para que se vea bonita en el historial
+        uid_jefe: user.uid, 
+        nombre_jefe: user.displayName,
+        servicio: userData.servicio_nombre, 
+        fecha: serverTimestamp(), 
+        estatus: 'activo'
+    });
+    alert("Reporte guardado en el expediente.");
+    setReporteForm({ uid_pasante: '', gravedad: 'leve', descripcion: '' });
+  };
 
-    return (
-      <div style={styles.container}>
-        {/* NAVBAR */}
-        <nav style={styles.navbar}>
-          <div style={styles.brand}>Nexus Admin</div>
-          
-          {/* TABS DE NAVEGACIÓN */}
-          <div style={styles.tabsContainer}>
-            <button 
-                onClick={()=>setVistaAdmin('asistencias')} 
-                style={vistaAdmin==='asistencias' ? styles.tabActive : styles.tab}
-            >
-                <CalIcon size={18}/> Asistencias
-            </button>
-            <button 
-                onClick={()=>setVistaAdmin('usuarios')} 
-                style={vistaAdmin==='usuarios' ? styles.tabActive : styles.tab}
-            >
-                <UserPlus size={18}/> 
-                Solicitudes
-                {usuariosPendientes.length > 0 && <span style={styles.notificationBadge}>{usuariosPendientes.length}</span>}
-            </button>
-            <button 
-                onClick={()=>setVistaAdmin('servicios')} 
-                style={vistaAdmin==='servicios' ? styles.tabActive : styles.tab}
-            >
-                <Layers size={18}/> Servicios
-            </button>
-          </div>
+  return (
+    <div style={styles.container}>
+      <nav style={styles.navbar}>
+        <div>
+            <div style={{fontWeight:'bold'}}>{userData.rol === 'jefe_servicio' ? 'Jefatura' : 'Profesional'}</div>
+            <div style={{fontSize:'0.8rem', color:'#666'}}>{userData.servicio_nombre}</div>
+        </div>
+        <button onClick={logoutUser} style={{background:'none', border:'none', cursor:'pointer'}}><LogOut size={18}/></button>
+      </nav>
 
-          <div style={styles.userInfo}>
-              <span style={styles.badge}><ShieldCheck size={14}/> ADMIN</span>
-              <span style={styles.userName}>{user.displayName?.split(' ')[0]}</span>
-              <button onClick={logoutUser} style={styles.logoutBtn}><LogOut size={18} /></button>
-          </div>
-        </nav>
+      <div style={styles.tabs}>
+        <button style={vista==='entradas'?styles.tabActive:styles.tab} onClick={()=>setVista('entradas')}><UserCheck size={16}/> Pendientes</button>
+        {userData.rol === 'jefe_servicio' && (
+            <>
+                <button style={vista==='pasantes'?styles.tabActive:styles.tab} onClick={()=>setVista('pasantes')}><Users size={16}/> Mis Pasantes</button>
+                <button style={vista==='reportes'?styles.tabActive:styles.tab} onClick={()=>setVista('reportes')}><AlertTriangle size={16}/> Crear Reporte</button>
+            </>
+        )}
+      </div>
 
-        <main style={styles.main}>
-            
-            {/* VISTA 1: APROBACIÓN DE USUARIOS */}
-            {vistaAdmin === 'usuarios' && (
-                <div>
-                    <h2 style={{marginBottom:'1.5rem'}}>Usuarios esperando acceso</h2>
-                    {usuariosPendientes.length === 0 ? (
-                        <div style={styles.emptyState}>No hay solicitudes pendientes.</div>
-                    ) : (
-                        <div style={styles.userGrid}>
-                            {usuariosPendientes.map(u => (
-                                <div key={u.id} style={styles.userCard}>
-                                    <div style={{display:'flex', gap:'1rem', alignItems:'center', marginBottom:'1rem'}}>
-                                        <img src={u.foto_url} style={{width:50, borderRadius:'50%'}} alt="."/>
-                                        <div>
-                                            <h4 style={{margin:0}}>{u.nombre}</h4>
-                                            <p style={{margin:0, color:'#666', fontSize:'0.9rem'}}>{u.telefono}</p>
-                                            <div style={styles.rolTag}>
-                                                Solicita: {u.rol.toUpperCase()} 
-                                                {u.servicio_nombre ? ` (${u.servicio_nombre})` : ''}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <button 
-                                        onClick={() => aprobarUsuario(u.id, u.rol, u.nombre)}
-                                        style={styles.btnApproveFull}
-                                    >
-                                        <CheckCircle size={18}/> Aprobar Ingreso
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {/* VISTA 2: CALENDARIO DE ASISTENCIAS */}
-            {vistaAdmin === 'asistencias' && (
-                <>
-                    <div style={styles.monthSelector}>
-                        <button onClick={() => cambiarMes(-1)} style={styles.navBtn}><ChevronLeft/></button>
-                        <h2 style={{margin:0, width:'250px', textAlign:'center', textTransform:'capitalize'}}>
-                            {fechaActual.toLocaleString('es-ES', { month: 'long', year: 'numeric' })}
-                        </h2>
-                        <button onClick={() => cambiarMes(1)} style={styles.navBtn}><ChevronRight/></button>
-                    </div>
-
-                    <div style={styles.panelLayout}>
-                        <div style={styles.calendarSection}>
-                            <div style={styles.calendarGrid}>
-                                {diasArray.map(dia => {
-                                    const hayPendientes = asistenciasMes.some(a => a.fechaJS.getDate() === dia && a.estatus === 'pendiente_validacion');
-                                    const hayRegistros = asistenciasMes.some(a => a.fechaJS.getDate() === dia);
-                                    
-                                    return (
-                                        <div 
-                                            key={dia} 
-                                            onClick={() => setDiaSeleccionado(dia)}
-                                            style={{
-                                                ...styles.dayBox,
-                                                backgroundColor: diaSeleccionado === dia ? 'var(--color-primary)' : 'white',
-                                                color: diaSeleccionado === dia ? 'white' : 'var(--color-text-main)',
-                                                borderColor: diaSeleccionado === dia ? 'var(--color-primary)' : '#eee'
-                                            }}
-                                        >
-                                            <span style={{fontWeight:'bold'}}>{dia}</span>
-                                            <div style={{display:'flex', gap:'2px', marginTop:'4px'}}>
-                                                {hayPendientes && <div style={styles.dotWarning}></div>}
-                                                {!hayPendientes && hayRegistros && <div style={styles.dotSuccess}></div>}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
+      <main style={styles.main}>
+        
+        {/* VISTA 1: ENTRADAS (Igual que antes) */}
+        {vista === 'entradas' && (
+            <div>
+                <h2 style={{marginBottom:'1rem'}}>Solicitudes ({solicitudes.length})</h2>
+                {solicitudes.length === 0 && <div style={styles.emptyState}>Estás al día.</div>}
+                <div style={styles.grid}>
+                    {solicitudes.map(soli => (
+                        <div key={soli.id} style={{...styles.card, borderLeft: soli.estatus === 'pendiente_salida' ? '4px solid #f59e0b' : '4px solid var(--color-primary)'}}>
+                            <div style={{fontWeight:'bold', marginBottom:'5px'}}>{soli.nombre_pasante}</div>
+                            <div style={{fontSize:'0.85rem', color:'#666', marginBottom:'10px'}}>
+                                {soli.estatus === 'pendiente_salida' ? '⚠️ Solicita Salida' : '🔵 Solicita Entrada'}
                             </div>
-                            <div style={styles.leyenda}>
-                                <span style={{display:'flex', alignItems:'center', gap:'5px'}}><div style={styles.dotWarning}></div> Pendientes</span>
-                                <span style={{display:'flex', alignItems:'center', gap:'5px'}}><div style={styles.dotSuccess}></div> Completado</span>
-                            </div>
-                        </div>
-
-                        <div style={styles.detailSection}>
-                            <h3 style={{margin:'0 0 1rem 0', display:'flex', alignItems:'center', gap:'10px'}}>
-                                <CalIcon size={20}/> Día {diaSeleccionado}
-                            </h3>
-                            
-                            {registrosDelDia.length === 0 ? (
-                                <div style={styles.emptyState}>Sin actividad.</div>
+                            {soli.estatus === 'pendiente_salida' ? (
+                                <button onClick={()=>validarSalida(soli)} style={styles.btnFinish}>Confirmar y Cerrar</button>
                             ) : (
-                                <div style={styles.listaItems}>
-                                    {registrosDelDia.map(item => (
-                                        <div key={item.id} style={styles.itemRow}>
-                                            <div style={{flex:1}}>
-                                                <p style={{margin:0, fontWeight:'bold'}}>{item.nombre_pasante}</p>
-                                                <p style={{margin:0, fontSize:'0.75rem', color:'#666'}}>
-                                                    Área: {item.servicio}
-                                                </p>
-                                                <p style={{margin:0, fontSize:'0.75rem', color:'#888'}}>
-                                                    Resp: {item.nombre_responsable || item.responsable_seleccionado}
-                                                </p>
-                                            </div>
-                                            
-                                            {item.estatus === 'pendiente_validacion' ? (
-                                                <div style={{display:'flex', gap:'5px'}}>
-                                                    <button onClick={() => validarAsistencia(item.id, 'rechazado')} style={styles.btnActionReject}><XCircle size={18}/></button>
-                                                    <button onClick={() => validarAsistencia(item.id, 'aprobado')} style={styles.btnActionApprove}><CheckCircle size={18}/></button>
-                                                </div>
-                                            ) : (
-                                                <span style={{
-                                                    fontSize:'0.75rem', padding:'2px 6px', borderRadius:'4px',
-                                                    backgroundColor: item.estatus === 'aprobado' ? '#e6f4ea' : '#fce8e6',
-                                                    color: item.estatus === 'aprobado' ? '#1e8e3e' : '#d93025'
-                                                }}>
-                                                    {item.estatus.toUpperCase()}
-                                                </span>
-                                            )}
-                                        </div>
-                                    ))}
+                                <div style={{display:'flex', gap:'5px'}}>
+                                    <button onClick={()=>validarEntrada(soli, 'rechazado')} style={styles.btnReject}>X</button>
+                                    <button onClick={()=>validarEntrada(soli, 'aprobado')} style={styles.btnApprove}>Aceptar</button>
                                 </div>
                             )}
                         </div>
+                    ))}
+                </div>
+            </div>
+        )}
+
+        {/* VISTA 2: LISTA DE PASANTES (Ahora con botón de Ver Expediente) */}
+        {vista === 'pasantes' && (
+            <div>
+                <h2 style={{marginBottom:'1rem'}}>Mi Equipo</h2>
+                <div style={styles.grid}>
+                    {pasantes.map(p => (
+                        <div key={p.uid} style={styles.card}>
+                            <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start'}}>
+                                <div style={{display:'flex', gap:'10px'}}>
+                                    <img src={p.foto_url} style={{width:50, height:50, borderRadius:'50%'}} alt="."/>
+                                    <div>
+                                        <div style={{fontWeight:'bold'}}>{p.nombre}</div>
+                                        <div style={{fontSize:'0.8rem', color:'#666'}}>{p.telefono}</div>
+                                        <div style={{marginTop:'5px', fontWeight:'bold', color:'var(--color-primary)'}}>
+                                            {(p.horas_acumuladas || 0).toFixed(1)} hrs
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <button 
+                                onClick={() => setPasanteSeleccionado(p)}
+                                style={styles.btnOutline}
+                            >
+                                <Eye size={16}/> Ver Expediente
+                            </button>
+                        </div>
+                    ))}
+                    {pasantes.length === 0 && <p style={{color:'#999'}}>No hay pasantes registrados.</p>}
+                </div>
+            </div>
+        )}
+
+        {/* VISTA 3: CREAR REPORTE */}
+        {vista === 'reportes' && (
+            <div style={styles.card}>
+                <h3>Nuevo Reporte de Incidencia</h3>
+                <form onSubmit={enviarReporte} style={{marginTop:'1rem', display:'flex', flexDirection:'column', gap:'1rem'}}>
+                    <select style={styles.input} value={reporteForm.uid_pasante} onChange={e=>setReporteForm({...reporteForm, uid_pasante: e.target.value})} required>
+                        <option value="">Seleccionar Pasante...</option>
+                        {pasantes.map(p => <option key={p.uid} value={p.uid}>{p.nombre}</option>)}
+                    </select>
+                    <select style={styles.input} value={reporteForm.gravedad} onChange={e=>setReporteForm({...reporteForm, gravedad: e.target.value})}>
+                        <option value="leve">Leve (Llamada de atención)</option>
+                        <option value="moderada">Moderada (Incumplimiento)</option>
+                        <option value="grave">Grave (Acta administrativa)</option>
+                    </select>
+                    <textarea style={{...styles.input, height:'100px'}} value={reporteForm.descripcion} onChange={e=>setReporteForm({...reporteForm, descripcion: e.target.value})} placeholder="Describe detalladamente el suceso..." required/>
+                    <button type="submit" style={styles.btnApprove}>Guardar en Expediente</button>
+                </form>
+            </div>
+        )}
+      </main>
+
+      {/* --- MODAL DE EXPEDIENTE --- */}
+      {pasanteSeleccionado && (
+        <div style={styles.modalOverlay}>
+            <div style={styles.modalContent}>
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:'1px solid #eee', paddingBottom:'1rem', marginBottom:'1rem'}}>
+                    <h3 style={{margin:0}}>Expediente del Pasante</h3>
+                    <button onClick={() => setPasanteSeleccionado(null)} style={{background:'none', border:'none', cursor:'pointer'}}>
+                        <X size={24} color="#666"/>
+                    </button>
+                </div>
+
+                <div style={{display:'flex', gap:'1rem', alignItems:'center', marginBottom:'2rem'}}>
+                    <img src={pasanteSeleccionado.foto_url} style={{width:60, height:60, borderRadius:'50%'}} alt="."/>
+                    <div>
+                        <h2 style={{margin:0, fontSize:'1.2rem'}}>{pasanteSeleccionado.nombre}</h2>
+                        <p style={{margin:0, color:'#666'}}>{pasanteSeleccionado.email}</p>
+                        <div style={{marginTop:'5px', display:'inline-block', background:'#e8f0fe', color:'var(--color-primary)', padding:'2px 8px', borderRadius:'10px', fontSize:'0.8rem', fontWeight:'bold'}}>
+                            Total Acumulado: {pasanteSeleccionado.horas_acumuladas?.toFixed(1) || 0} horas
+                        </div>
                     </div>
-                </>
-            )}
+                </div>
 
-            {/* VISTA 3: GESTIÓN DE SERVICIOS */}
-            {vistaAdmin === 'servicios' && <AdminServicios />}
+                <h4 style={{display:'flex', alignItems:'center', gap:'8px'}}>
+                    <AlertCircle size={18}/> Historial de Reportes
+                </h4>
+                
+                <div style={styles.historialContainer}>
+                    {cargandoHistorial ? <p>Cargando notas...</p> : historialReportes.length === 0 ? (
+                        <div style={{textAlign:'center', padding:'2rem', color:'#999', fontStyle:'italic'}}>
+                            Este pasante tiene un expediente limpio.
+                        </div>
+                    ) : (
+                        historialReportes.map(repo => (
+                            <div key={repo.id} style={{
+                                ...styles.reporteItem, 
+                                borderLeft: repo.gravedad === 'grave' ? '4px solid #d32f2f' : repo.gravedad === 'moderada' ? '4px solid #f59e0b' : '4px solid #1976d2'
+                            }}>
+                                <div style={{display:'flex', justifyContent:'space-between', marginBottom:'5px'}}>
+                                    <span style={{
+                                        textTransform:'uppercase', fontSize:'0.7rem', fontWeight:'bold', 
+                                        color: repo.gravedad === 'grave' ? '#d32f2f' : repo.gravedad === 'moderada' ? '#f59e0b' : '#1976d2'
+                                    }}>
+                                        FALTA {repo.gravedad}
+                                    </span>
+                                    <span style={{fontSize:'0.75rem', color:'#999'}}>
+                                        {repo.fecha?.toDate().toLocaleDateString()}
+                                    </span>
+                                </div>
+                                <p style={{margin:'0 0 5px 0', fontSize:'0.9rem', color:'#333'}}>{repo.descripcion}</p>
+                                <div style={{fontSize:'0.75rem', color:'#888', fontStyle:'italic'}}>
+                                    Reportó: {repo.nombre_jefe}
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+        </div>
+      )}
 
-        </main>
-      </div>
-    );
+    </div>
+  );
 };
 
-// ==========================================
-// 2. COMPONENTE PRINCIPAL (ROUTER DE ROLES)
-// ==========================================
-const Dashboard = () => {
-  const { userData } = useUser();
-
-  if (!userData) return <div style={{padding:'2rem'}}>Cargando perfil...</div>;
-
-  // 1. ADMIN
-  if (userData.rol === 'admin') return <DashboardAdmin />;
-
-  // 2. PASANTE
-  if (userData.rol === 'pasante') return <DashboardPasante />;
-
-  // 3. STAFF (Profesional o Jefe)
-  if (userData.rol === 'profesional' || userData.rol === 'jefe_servicio') {
-      return <DashboardStaff />;
-  }
-
-  // 4. ERROR
-  return <div>Rol no reconocido: {userData.rol}</div>;
-};
-
-// ==========================================
-// 3. ESTILOS
-// ==========================================
 const styles = {
     container: { minHeight: '100vh', backgroundColor: '#f8f9fa' },
-    navbar: { backgroundColor: 'var(--color-primary)', color: 'white', padding: '1rem 2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' },
-    brand: { fontSize: '1.2rem', fontWeight: 'bold' },
-    
-    // Tabs Navigation
-    tabsContainer: { display:'flex', gap:'10px' },
-    tab: { background:'none', border:'none', color:'rgba(255,255,255,0.7)', cursor:'pointer', display:'flex', gap:'8px', alignItems:'center', padding:'8px 12px', borderRadius:'8px', fontSize:'0.9rem', fontWeight:'500', position:'relative' },
-    tabActive: { background:'rgba(255,255,255,0.2)', border:'none', color:'white', cursor:'pointer', display:'flex', gap:'8px', alignItems:'center', padding:'8px 12px', borderRadius:'8px', fontSize:'0.9rem', fontWeight:'bold', position:'relative' },
-    notificationBadge: { position:'absolute', top:'-5px', right:'-5px', background:'#ff4444', color:'white', fontSize:'0.7rem', width:'18px', height:'18px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center' },
-
-    userInfo: { display: 'flex', alignItems: 'center', gap: '1rem' },
-    badge: { backgroundColor: 'rgba(255,255,255,0.2)', padding: '4px 8px', borderRadius: '12px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '5px' },
-    logoutBtn: { background: 'none', border: 'none', color: 'white', cursor: 'pointer', opacity: 0.8 },
-    main: { padding: '2rem', maxWidth: '1100px', margin: '0 auto' },
-    
-    // Admin Calendar Views
-    monthSelector: { display:'flex', alignItems:'center', justifyContent:'center', marginBottom:'2rem', gap:'1rem' },
-    navBtn: { background:'white', border:'1px solid #ddd', borderRadius:'50%', width:'40px', height:'40px', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'0 2px 2px rgba(0,0,0,0.05)' },
-    panelLayout: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '2rem' },
-    calendarSection: { backgroundColor:'white', padding:'1.5rem', borderRadius:'16px', boxShadow:'0 4px 6px rgba(0,0,0,0.05)' },
-    calendarGrid: { display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap:'8px' },
-    dayBox: { aspectRatio:'1/1', borderRadius:'8px', border:'1px solid #eee', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', transition:'all 0.2s' },
-    dotWarning: { width:'8px', height:'8px', borderRadius:'50%', backgroundColor:'var(--color-warning)' },
-    dotSuccess: { width:'8px', height:'8px', borderRadius:'50%', backgroundColor:'var(--color-success)' },
-    leyenda: {marginTop:'10px', fontSize:'0.8rem', color:'#666', display:'flex', gap:'15px', justifyContent:'center'},
-    
-    // Details
-    detailSection: { backgroundColor:'white', padding:'1.5rem', borderRadius:'16px', boxShadow:'0 4px 6px rgba(0,0,0,0.05)', maxHeight:'500px', overflowY:'auto' },
+    navbar: { backgroundColor: 'white', padding: '1rem', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #ddd', alignItems:'center' },
+    main: { padding: '2rem', maxWidth: '800px', margin: '0 auto' },
+    tabs: { display:'flex', justifyContent:'center', gap:'1rem', padding:'1rem', flexWrap:'wrap' },
+    tab: { padding:'8px 16px', border:'none', background:'none', cursor:'pointer', display:'flex', gap:'5px', alignItems:'center', opacity:0.6 },
+    tabActive: { padding:'8px 16px', border:'none', background:'white', borderRadius:'20px', boxShadow:'0 2px 4px rgba(0,0,0,0.1)', cursor:'pointer', display:'flex', gap:'5px', alignItems:'center', fontWeight:'bold', color:'var(--color-primary)' },
+    grid: { display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(300px, 1fr))', gap:'1rem' },
+    card: { background:'white', padding:'1rem', borderRadius:'12px', boxShadow:'0 2px 5px rgba(0,0,0,0.05)' },
     emptyState: { textAlign:'center', color:'#999', padding:'2rem', border:'2px dashed #eee', borderRadius:'8px' },
-    listaItems: { display:'flex', flexDirection:'column', gap:'10px' },
-    itemRow: { display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px', borderBottom:'1px solid #eee' },
-    btnActionApprove: { background:'#e6f4ea', border:'none', color:'#1e8e3e', width:'32px', height:'32px', borderRadius:'8px', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' },
-    btnActionReject: { background:'#fce8e6', border:'none', color:'#d93025', width:'32px', height:'32px', borderRadius:'8px', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' },
-
-    // Users Approval Views
-    userGrid: { display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(300px, 1fr))', gap:'1rem' },
-    userCard: { background:'white', padding:'1.5rem', borderRadius:'12px', boxShadow:'0 2px 4px rgba(0,0,0,0.05)' },
-    rolTag: { display:'inline-block', background:'#e8f0fe', color:'var(--color-primary)', padding:'2px 8px', borderRadius:'4px', fontSize:'0.8rem', fontWeight:'bold', marginTop:'5px' },
-    btnApproveFull: { width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px', background:'var(--color-primary)', color:'white', border:'none', padding:'10px', borderRadius:'8px', cursor:'pointer', fontWeight:'bold' }
+    
+    // Botones
+    btnApprove: { flex:1, padding:'10px', border:'none', borderRadius:'6px', background:'var(--color-primary)', color:'white', cursor:'pointer', fontWeight:'bold' },
+    btnReject: { flex:1, padding:'10px', border:'1px solid #ddd', borderRadius:'6px', background:'white', cursor:'pointer', color:'#d32f2f' },
+    btnFinish: { width:'100%', padding:'10px', border:'none', borderRadius:'6px', background:'#f59e0b', color:'white', cursor:'pointer', fontWeight:'bold' },
+    btnOutline: { marginTop:'1rem', width:'100%', padding:'8px', background:'white', border:'1px solid var(--color-primary)', color:'var(--color-primary)', borderRadius:'6px', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:'5px', fontWeight:'500' },
+    
+    input: { width:'100%', padding:'10px', borderRadius:'8px', border:'1px solid #ddd' },
+    
+    // Modal Styles
+    modalOverlay: { position:'fixed', top:0, left:0, right:0, bottom:0, backgroundColor:'rgba(0,0,0,0.5)', display:'flex', justifyContent:'center', alignItems:'center', zIndex:1000, padding:'1rem' },
+    modalContent: { backgroundColor:'white', padding:'2rem', borderRadius:'16px', width:'100%', maxWidth:'500px', maxHeight:'80vh', overflowY:'auto' },
+    historialContainer: { background:'#f8f9fa', borderRadius:'8px', padding:'1rem', maxHeight:'300px', overflowY:'auto' },
+    reporteItem: { background:'white', padding:'10px', borderRadius:'6px', marginBottom:'10px', border:'1px solid #eee' }
 };
 
-export default Dashboard;
+export default DashboardStaff;
