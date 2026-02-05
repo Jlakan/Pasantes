@@ -1,65 +1,67 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useUser } from '../context/UserContext';
-import { LogOut } from 'lucide-react';
-import { logoutUser } from '../services/auth';
+
+// Importamos los componentes
+import DashboardAdmin from './DashboardAdmin';
+import DashboardStaff from './DashboardStaff';
+import DashboardPasante from './DashboardPasante';
+import RegistroData from './RegistroData'; // Importamos el registro por si acaso
 
 const Dashboard = () => {
-  const { userData } = useUser();
+  const { userData, faltaRegistro } = useUser();
+  const [vistaAdmin, setVistaAdmin] = useState(true);
 
-  if (!userData) return <div style={{padding: '2rem'}}>Cargando datos del usuario...</div>;
+  if (!userData) return <div style={{padding:'20px'}}>Cargando sistema...</div>;
 
-  // --- PANTALLA DE LA VERDAD ---
-  return (
-    <div style={{
-      position: 'fixed', 
-      top: 0, 
-      left: 0, 
-      width: '100%', 
-      height: '100vh', 
-      backgroundColor: 'black', 
-      color: '#00ff00', // Verde brillante
-      padding: '2rem', 
-      fontFamily: 'monospace', 
-      fontSize: '18px', 
-      zIndex: 99999,
-      overflowY: 'auto'
-    }}>
-      <h1>🔍 DIAGNÓSTICO DE VERDAD</h1>
-      <hr style={{borderColor: 'white'}}/>
-      
-      <p><strong>Nombre:</strong> {userData.nombre}</p>
-      <p><strong>UID:</strong> {userData.uid}</p>
-      
-      {/* Esto imprimirá true, false o undefined */}
-      <p><strong>¿isAdmin? (Booleano):</strong> {JSON.stringify(userData.isAdmin)}</p>
-      <p><strong>¿isPasante? (Booleano):</strong> {JSON.stringify(userData.isPasante)}</p>
-      
-      <div style={{marginTop: '20px', border: '1px solid white', padding: '10px'}}>
-        <h3>👉 DIAGNÓSTICO:</h3>
-        {userData.isAdmin === true 
-          ? <span style={{color: 'red', fontWeight: 'bold'}}>EL SISTEMA DICE QUE ERES ADMIN. (Ve a Firebase y cámbialo a false)</span>
-          : <span style={{color: 'cyan'}}>EL SISTEMA NO TE VE COMO ADMIN. (Si veías el panel, tenías código mezclado)</span>
-        }
+  // 0. SI FALTA COMPLETAR REGISTRO
+  if (faltaRegistro) {
+    return <RegistroData />;
+  }
+
+  // 0.5 SI ESTÁ PENDIENTE DE APROBACIÓN (Opcional, mensaje de espera)
+  if (userData.estatus_cuenta === 'pendiente_asignacion') {
+    return (
+      <div style={{height:'100vh', display:'flex', justifyContent:'center', alignItems:'center', flexDirection:'column'}}>
+         <h2>⏳ Solicitud Enviada</h2>
+         <p>Un administrador debe asignarte un rol y servicio.</p>
       </div>
+    );
+  }
 
-      <button 
-        onClick={logoutUser} 
-        style={{
-          marginTop: '30px', 
-          padding: '15px', 
-          backgroundColor: 'white', 
-          color: 'black', 
-          fontWeight: 'bold', 
-          cursor: 'pointer',
-          borderRadius: '8px',
-          border: 'none'
-        }}
-      >
-        <LogOut size={16} style={{verticalAlign: 'middle', marginRight:'5px'}}/> 
-        CERRAR SESIÓN Y REINICIAR
-      </button>
-    </div>
-  );
+  // 1. ROL DE ADMIN (Con Switch)
+  if (userData.isAdmin) {
+    // Detectamos si tiene doble vida (Admin + Responsable)
+    const tieneDobleRol = userData.isProfessional || userData.isResponsable;
+
+    if (vistaAdmin) {
+      return (
+        <DashboardAdmin 
+            esDobleRol={tieneDobleRol} 
+            cambiarVista={() => setVistaAdmin(false)} 
+        />
+      );
+    } else {
+      return (
+        <DashboardStaff 
+            esAdminModoUsuario={true} 
+            cambiarVista={() => setVistaAdmin(true)}
+        />
+      );
+    }
+  }
+
+  // 2. ROL DE STAFF (Jefes y Profesionales)
+  if (userData.isProfessional || userData.isResponsable) {
+    return <DashboardStaff />;
+  }
+
+  // 3. ROL DE PASANTE
+  if (userData.isPasante) {
+    return <DashboardPasante />;
+  }
+
+  // 4. FALLBACK
+  return <div>Tu cuenta está activa pero no tiene roles asignados. Contacta a soporte.</div>;
 };
 
 export default Dashboard;

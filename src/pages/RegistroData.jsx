@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useUser } from '../context/UserContext';
 import { db } from '../services/firebase';
-import { doc, updateDoc } from 'firebase/firestore'; 
+import { doc, setDocDoc } from 'firebase/firestore'; 
 import { User, Phone } from 'lucide-react';
 
 const RegistroData = () => {
@@ -46,7 +46,7 @@ const RegistroData = () => {
       };
 
       // Actualizamos SOLO la colección Global 'Usuarios'
-      await updateDoc(doc(db, "Usuarios", user.uid), perfilInicial);
+      await setDoc(doc(db, "Usuarios", user.uid), perfilInicial);
 
       // Recargar la página para que el UserContext lea los nuevos datos
       window.location.reload(); 

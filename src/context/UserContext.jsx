@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { auth, db } from '../services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore'; // Usamos onSnapshot
 
 const UserContext = createContext();
 
@@ -18,36 +18,53 @@ export const UserProvider = ({ children }) => {
 
       if (currentUser) {
         setUser(currentUser);
-
         const docRef = doc(db, 'Usuarios', currentUser.uid);
-        const docSnap = await getDoc(docRef);
+        
+        // ESCUCHAMOS EN TIEMPO REAL: Si cambias el rol en BD, la app reacciona al instante
+        const unsubscribeDoc = onSnapshot(docRef, (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            
+            // --- BLINDAJE DE SEGURIDAD ---
+            setUserData({
+              ...data,
+              // Convertimos cualquier "basura" o undefined a false explícito
+              isAdmin: !!data.isAdmin,
+              isPasante: !!data.isPasante,
+              isProfessional: !!data.isProfessional,
+              isResponsable: !!data.isResponsable,
+            });
+          } else {
+            // USUARIO NUEVO (Si entra por Google y no existe doc)
+            const nuevoUsuario = {
+              nombre: currentUser.displayName,
+              email: currentUser.email,
+              foto_url: currentUser.photoURL,
+              rol: 'indefinido',
+              estatus_cuenta: 'pendiente_registro',
+              registro_completo: false,
+              fecha_registro: serverTimestamp(),
+              // Inicializamos banderas en false
+              isAdmin: false,
+              isPasante: false,
+              isProfessional: false,
+              isResponsable: false
+            };
+            // Usamos setDoc para crear
+            setDoc(docRef, nuevoUsuario);
+            setUserData(nuevoUsuario);
+          }
+          setLoading(false);
+        });
 
-        if (docSnap.exists()) {
-          // Ya existe, bajamos sus datos
-          setUserData(docSnap.data());
-        } else {
-          // ES NUEVO: Creamos el cascarón básico
-          const nuevoUsuario = {
-            nombre: currentUser.displayName,
-            email: currentUser.email,
-            foto_url: currentUser.photoURL,
+        // Limpiamos el listener del documento al salir
+        return () => unsubscribeDoc();
 
-            // IMPORTANTE:
-            rol: 'indefinido',
-            estatus_cuenta: 'pendiente_registro', // Aún no llena el formulario
-            registro_completo: false, // Bandera para saber si ya llenó datos
-
-            fecha_registro: serverTimestamp(),
-          };
-
-          await setDoc(docRef, nuevoUsuario);
-          setUserData(nuevoUsuario);
-        }
       } else {
         setUser(null);
         setUserData(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return () => unsubscribe();
@@ -57,9 +74,8 @@ export const UserProvider = ({ children }) => {
     user,
     userData,
     loading,
-    // Helpers rápidos
     faltaRegistro: userData && !userData.registro_completo,
-    esperandoAprobacion: userData && userData.estatus_cuenta === 'por_aprobar',
+    esperandoAprobacion: userData && userData.estatus_cuenta === 'pendiente_asignacion',
     esActivo: userData && userData.estatus_cuenta === 'activo',
   };
 
