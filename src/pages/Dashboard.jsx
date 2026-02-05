@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useUser } from '../context/UserContext';
 
 // Importamos los componentes
@@ -8,50 +8,52 @@ import DashboardPasante from './DashboardPasante';
 
 const Dashboard = () => {
   const { userData } = useUser();
-  
-  // Estado para controlar manualmente qué vista mostrar
-  // Por defecto es 'admin' si es admin, sino lo que le toque.
   const [vistaAdmin, setVistaAdmin] = useState(true);
+
+  // --- DEBUG TEMPORAL (Esto te dirá la verdad en la consola) ---
+  console.log("--- DEBUG DASHBOARD ---");
+  console.log("Usuario:", userData?.nombre);
+  console.log("Rol Admin (DB):", userData?.isAdmin);
+  console.log("Rol Pasante (DB):", userData?.isPasante);
+  console.log("Objeto completo:", userData);
+  // -----------------------------------------------------------
 
   if (!userData) return <div style={{padding:'20px'}}>Cargando perfil...</div>;
 
-  // --- LÓGICA DEL SWITCH ---
-
-  // CASO 1: Es ADMINISTRADOR (Y tal vez también Responsable)
-  if (userData.isAdmin) {
-    // Verificamos si TAMBIÉN es personal médico (doble rol)
+  // 1. CASO ADMIN (Con verificación estricta)
+  if (userData.isAdmin === true) {
+    // Verificamos si tiene doble rol para activar el botón de switch
     const tieneDobleRol = userData.isProfessional || userData.isResponsable;
 
     if (vistaAdmin) {
       return (
         <DashboardAdmin 
-            // Pasamos estas props para que el DashboardAdmin pueda mostrar el botón
             esDobleRol={tieneDobleRol} 
             cambiarVista={() => setVistaAdmin(false)} 
         />
       );
     } else {
-      // Si el admin desactivó su vista, le mostramos el Staff con un botón para volver
       return (
         <DashboardStaff 
-            esAdminModoUsuario={true} // Flag para saber que es un admin "disfrazado"
+            esAdminModoUsuario={true} 
             cambiarVista={() => setVistaAdmin(true)}
         />
       );
     }
   }
 
-  // CASO 2: Es Staff normal (Jefe o Profesional)
+  // 2. CASO STAFF (Profesional o Jefe)
   if (userData.isProfessional || userData.isResponsable) {
     return <DashboardStaff />;
   }
 
-  // CASO 3: Es Pasante
+  // 3. CASO PASANTE
   if (userData.isPasante) {
     return <DashboardPasante />;
   }
 
-  return <div>Rol desconocido. Contacta a soporte.</div>;
-};
+  // 4. FALLBACK
+  return <div>Rol desconocido o no asignado. Contacta a soporte.</div>;
+}; // <--- ESTA ES LA LLAVE QUE FALTABA
 
 export default Dashboard;
