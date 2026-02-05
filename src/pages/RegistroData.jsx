@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useUser } from '../context/UserContext';
 import { db } from '../services/firebase';
-import { doc, setDocDoc } from 'firebase/firestore'; 
+import { doc, setDoc } from 'firebase/firestore'; 
 import { User, Phone } from 'lucide-react';
 
 const RegistroData = () => {
