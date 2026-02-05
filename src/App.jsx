@@ -1,7 +1,10 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
-import Dashboard from './pages/DashboardAdmin';
+
+import Dashboard from './components/Dashboard'; // O './pages/Dashboard', depende donde guardaste el Fragmento #4
+// ------------------
+
 import RegistroData from './pages/RegistroData';
 import { useUser } from './context/UserContext';
 import { LogOut, Clock } from 'lucide-react';
