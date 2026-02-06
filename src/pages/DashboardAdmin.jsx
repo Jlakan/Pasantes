@@ -6,11 +6,15 @@ import {
 import { logoutUser } from '../services/auth';
 import { 
   LogOut, User, CheckCircle, Shield, Briefcase, 
-  Settings, Save, X, RefreshCw 
+  Settings, Save, X, RefreshCw, Users 
 } from 'lucide-react';
 
-// Recibimos props para el switch de vistas
+// --- IMPORTAMOS LOS COMPONENTES HIJOS ---
+import HistorialGlobal from '../components/HistorialGlobal'; 
+import DirectorioUsuarios from '../components/DirectorioUsuarios';
+
 const DashboardAdmin = ({ esDobleRol, cambiarVista }) => {
+  // 1. ESTADOS (Aquí es donde estaba el error, estas variables faltaban)
   const [usuariosPendientes, setUsuariosPendientes] = useState([]);
   const [servicios, setServicios] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -19,10 +23,10 @@ const DashboardAdmin = ({ esDobleRol, cambiarVista }) => {
   const [usuarioAEditar, setUsuarioAEditar] = useState(null);
   const [seleccion, setSeleccion] = useState({
     servicio_id: '',
-    rol_asignar: 'pasante' // pasante, profesional, responsable
+    rol_asignar: 'pasante' 
   });
 
-  // 1. CARGAR USUARIOS PENDIENTES
+  // 2. CARGAR USUARIOS PENDIENTES (En tiempo real)
   useEffect(() => {
     const q = query(
       collection(db, "Usuarios"), 
@@ -35,7 +39,7 @@ const DashboardAdmin = ({ esDobleRol, cambiarVista }) => {
     return () => unsubscribe();
   }, []);
 
-  // 2. CARGAR LISTA DE SERVICIOS (Para el dropdown)
+  // 3. CARGAR LISTA DE SERVICIOS (Para el dropdown del modal)
   useEffect(() => {
     const cargarServicios = async () => {
       try {
@@ -46,7 +50,7 @@ const DashboardAdmin = ({ esDobleRol, cambiarVista }) => {
     cargarServicios();
   }, []);
 
-  // --- FUNCIÓN PRINCIPAL: APROBAR Y ASIGNAR ---
+  // 4. FUNCIÓN PARA GUARDAR Y ASIGNAR ROL
   const handleGuardarCambios = async () => {
     if (!seleccion.servicio_id) return alert("Debes seleccionar un servicio.");
     setLoading(true);
@@ -55,15 +59,14 @@ const DashboardAdmin = ({ esDobleRol, cambiarVista }) => {
       const servicioObj = servicios.find(s => s.id === seleccion.servicio_id);
       const uid = usuarioAEditar.id;
 
-      // 1. DEFINIR LOS BOOLEANS SEGÚN EL ROL SELECCIONADO
+      // Definir banderas
       const flags = {
         isPasante: seleccion.rol_asignar === 'pasante',
         isProfessional: seleccion.rol_asignar === 'profesional' || seleccion.rol_asignar === 'responsable',
         isResponsable: seleccion.rol_asignar === 'responsable',
-        // Nota: isAdmin no se asigna aquí por seguridad, se hace manual en DB
       };
 
-      // 2. PREPARAR DATA PARA ACTUALIZAR USUARIO GLOBAL
+      // Datos para actualizar
       const datosActualizados = {
         ...flags,
         servicio_id: servicioObj.id, 
@@ -73,15 +76,13 @@ const DashboardAdmin = ({ esDobleRol, cambiarVista }) => {
         fecha_asignacion: new Date()
       };
 
-      // A. Actualizar colección Usuarios (Global)
+      // A. Actualizar Usuario Global
       await updateDoc(doc(db, "Usuarios", uid), datosActualizados);
 
       // B. Crear copia en la colección del Servicio
       const carpetaDestino = flags.isPasante ? "Pasantes" : "Profesionales";
-      
       const perfilCompleto = { ...usuarioAEditar, ...datosActualizados };
       
-      // Usamos setDoc con merge para asegurar creación
       await setDoc(doc(db, servicioObj.id, "Data", carpetaDestino, uid), perfilCompleto, { merge: true });
 
       // C. Limpieza
@@ -96,6 +97,7 @@ const DashboardAdmin = ({ esDobleRol, cambiarVista }) => {
     setLoading(false);
   };
 
+  // 5. RENDERIZADO (VISTA)
   return (
     <div style={styles.container}>
       <nav style={styles.navbar}>
@@ -104,27 +106,11 @@ const DashboardAdmin = ({ esDobleRol, cambiarVista }) => {
         </div>
         
         <div style={{display:'flex', gap:'10px', alignItems:'center'}}>
-            {/* --- BOTÓN NUEVO DEL SWITCH --- */}
             {esDobleRol && (
-                <button 
-                    onClick={cambiarVista}
-                    style={{
-                        padding: '8px 12px', 
-                        fontSize: '0.8rem', 
-                        cursor: 'pointer', 
-                        borderRadius: '6px', 
-                        border: '1px solid #555', 
-                        background: '#333', 
-                        color: 'white',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '5px'
-                    }}
-                >
+                <button onClick={cambiarVista} style={styles.btnSwitch}>
                     <RefreshCw size={14}/> Ir a Responsable
                 </button>
             )}
-
             <button onClick={logoutUser} style={styles.btnLogout} title="Cerrar Sesión">
                 <LogOut size={18}/>
             </button>
@@ -132,6 +118,8 @@ const DashboardAdmin = ({ esDobleRol, cambiarVista }) => {
       </nav>
 
       <main style={styles.main}>
+        
+        {/* SECCIÓN 1: SOLICITUDES PENDIENTES */}
         <h2 style={{color:'#333'}}>Solicitudes de Ingreso ({usuariosPendientes.length})</h2>
         <p style={{color:'#666', marginBottom:'2rem'}}>Asigna roles y servicios a los nuevos usuarios.</p>
 
@@ -164,6 +152,23 @@ const DashboardAdmin = ({ esDobleRol, cambiarVista }) => {
                 ))}
             </div>
         )}
+
+        {/* SECCIÓN 2: DIRECTORIO DE USUARIOS (NUEVO) */}
+        <div style={{marginTop:'3rem', borderTop:'1px solid #ddd', paddingTop:'2rem'}}>
+            <h2 style={{color:'#333', display:'flex', alignItems:'center', gap:'10px'}}>
+                <Users size={24}/> Directorio y Gestión
+            </h2>
+            <p style={{color:'#666'}}>Busca usuarios, revisa perfiles, historiales y reportes.</p>
+            
+            <DirectorioUsuarios />
+        </div>
+
+        {/* SECCIÓN 3: SUPERVISIÓN GLOBAL (NUEVO) */}
+        <div style={{marginTop:'3rem', borderTop:'1px solid #ddd', paddingTop:'2rem'}}>
+            <h2 style={{color:'#333'}}>Supervisión de Asistencia</h2>
+            <HistorialGlobal />
+        </div>
+
       </main>
 
       {/* MODAL DE ASIGNACIÓN */}
@@ -228,6 +233,7 @@ const DashboardAdmin = ({ esDobleRol, cambiarVista }) => {
   );
 };
 
+// ESTILOS
 const styles = {
     container: { minHeight: '100vh', backgroundColor: '#f4f6f9' },
     navbar: { backgroundColor: '#1a1a1a', color:'white', padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems:'center' },
@@ -238,6 +244,9 @@ const styles = {
     emptyState: { textAlign:'center', padding:'4rem', color:'#999', border:'2px dashed #ddd', borderRadius:'12px' },
     btnAction: { width:'100%', padding:'10px', background:'var(--color-primary)', color:'white', border:'none', borderRadius:'6px', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px', fontWeight:'bold' },
     
+    // Switch Button
+    btnSwitch: { padding: '8px 12px', fontSize: '0.8rem', cursor: 'pointer', borderRadius: '6px', border: '1px solid #555', background: '#333', color: 'white', display: 'flex', alignItems: 'center', gap: '5px' },
+
     // Modal
     modalOverlay: { position:'fixed', top:0, left:0, right:0, bottom:0, backgroundColor:'rgba(0,0,0,0.6)', display:'flex', justifyContent:'center', alignItems:'center', zIndex:2000 },
     modalContent: { backgroundColor:'white', padding:'2rem', borderRadius:'16px', width:'90%', maxWidth:'500px' },
